@@ -4,6 +4,8 @@ from tkinter import messagebox
 import cv2
 import numpy as np
 import os
+import face_recognition
+import time
 
 DB_PATH = "students.db"
 HAAR_CASCADE_FACE = "haarcascades/haarcascade_frontalface_default.xml"
@@ -25,9 +27,8 @@ def recognize_face(reg_no):
         return False
 
     recognized = False
-    match_threshold = 70  # Lower = stricter match
+    match_threshold = 0.38  # Stricter threshold
 
-    # Build face data path using reg_no
     face_data_path = os.path.join("face_data", reg_no)
 
     if not os.path.exists(face_data_path):
@@ -35,51 +36,63 @@ def recognize_face(reg_no):
         cap.release()
         return False
 
-    known_faces = []
+    known_encodings = []
     for filename in os.listdir(face_data_path):
         img_path = os.path.join(face_data_path, filename)
-        img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+        img = cv2.imread(img_path)
         if img is not None:
-            img = cv2.resize(img, (200, 200))
-            known_faces.append(img)
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            encodings = face_recognition.face_encodings(img_rgb, num_jitters=2)
+            if encodings:
+                known_encodings.append(encodings[0])
 
-    if not known_faces:
+    if not known_encodings:
         messagebox.showerror("Error", "No valid face images found!")
         cap.release()
         return False
 
-    attempts = 0
-    max_attempts = 100  # Adjust if needed
-
-    while attempts < max_attempts:
+    start_time = time.time()
+    while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        face_locations = face_recognition.face_locations(rgb_frame)
+        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
 
-        for (x, y, w, h) in faces:
-            captured_face = gray[y:y+h, x:x+w]
-            captured_face = cv2.resize(captured_face, (200, 200))
+        for (top, right, bottom, left), encoding in zip(face_locations, face_encodings):
+            face_distances = face_recognition.face_distance(known_encodings, encoding)
+            best_distance = np.min(face_distances)
 
-            min_diff = float('inf')
-            for known_face in known_faces:
-                diff = np.sum(cv2.absdiff(known_face, captured_face)) / (200 * 200)
-                if diff < min_diff:
-                    min_diff = diff
+            confidence = 1 - best_distance
 
-            if min_diff < match_threshold:
+            if best_distance < match_threshold:
                 recognized = True
+                cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+                cv2.putText(frame, f"Matched ({confidence:.2f})", (left, top - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
                 break
+            else:
+                cv2.rectangle(frame, (left, top), (right, bottom), (0, 0, 255), 2)
+                cv2.putText(frame, f"Unmatched ({confidence:.2f})", (left, top - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
-        if recognized:
+        cv2.imshow("Face Recognition", frame)
+
+        if recognized or cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-        attempts += 1
+        # Stop after 20 seconds if no match
+        if time.time() - start_time > 20:
+            break
 
     cap.release()
     cv2.destroyAllWindows()
+
+    if not recognized:
+        messagebox.showwarning("Face Not Recognized", "Face didn't match. Please try again!")
+
     return recognized
 
 def login():
@@ -102,26 +115,22 @@ def login():
     else:
         messagebox.showerror("Error", "Face Authentication Failed! Try again.")
 
-# --------------- Tkinter GUI -------------------
+# ------------------ GUI ---------------------
 root = tk.Tk()
 root.title("Student Login")
 root.geometry("400x300")
 root.configure(bg="#f0f0f0")
 
-# Title
 tk.Label(root, text="Student Login", font=("Helvetica", 18, "bold"), bg="#f0f0f0").pack(pady=20)
 
-# Registration Number
 tk.Label(root, text="Registration No:", bg="#f0f0f0", font=("Helvetica", 12)).pack()
 entry_regno = tk.Entry(root, font=("Helvetica", 12))
 entry_regno.pack(pady=5)
 
-# Password
 tk.Label(root, text="Password:", bg="#f0f0f0", font=("Helvetica", 12)).pack()
 entry_password = tk.Entry(root, font=("Helvetica", 12), show="*")
 entry_password.pack(pady=5)
 
-# Login Button
 tk.Button(root, text="Login", font=("Helvetica", 12), bg="#4CAF50", fg="white", width=15, command=login).pack(pady=20)
 
 root.mainloop()
